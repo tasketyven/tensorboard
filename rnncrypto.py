@@ -2,26 +2,28 @@ import pandas as pd
 from collections import deque
 import random
 import numpy as np
-from sklearn import preprocessing
-import time
-import tensorflow as tf 
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, LSTM, CuDNNLSTM, BatchNormalization
+from tensorflow.keras.layers import Dense, Dropout, LSTM, BatchNormalization
 from tensorflow.keras.callbacks import TensorBoard
-from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.callbacks import ModelCheckpoint, ModelCheckpoint
+import time
+from sklearn import preprocessing
 
 SEQ_LEN = 60  # how long of a preceeding sequence to collect for RNN
 FUTURE_PERIOD_PREDICT = 3  # how far into the future are we trying to predict?
 RATIO_TO_PREDICT = "LTC-USD"
-EPOCS = 10
-BATCH_SIZE = 64
-NAME = f"{SEQ_LEN}-SEQ_LEN-{RATIO_TO_PREDICT}-PRED{int(time.time())}"
+EPOCHS = 10  # how many passes through our data
+BATCH_SIZE = 64  # how many batches? Try smaller batch if you're getting OOM (out of memory) errors.
+NAME = f"{SEQ_LEN}-SEQ-{FUTURE_PERIOD_PREDICT}-PRED-{int(time.time())}"
+
 
 def classify(current, future):
     if float(future) > float(current):  # if the future price is higher than the current, that's a buy, or a 1
         return 1
     else:  # otherwise... it's a 0!
         return 0
+
 
 def preprocess_df(df):
     df = df.drop("future", 1)  # don't need this anymore.
@@ -72,7 +74,7 @@ def preprocess_df(df):
         X.append(seq)  # X is the sequences
         y.append(target)  # y is the targets/labels (buys vs sell/notbuy)
 
-    return np.array(X), y  # return X and y...and make X a numpy array!
+    return np.array(X), np.array(y)  # return X and y...and make X a numpy array!
 
 
 main_df = pd.DataFrame() # begin empty
@@ -81,6 +83,7 @@ ratios = ["BTC-USD", "LTC-USD", "BCH-USD", "ETH-USD"]  # the 4 ratios we want to
 for ratio in ratios:  # begin iteration
 
     ratio = ratio.split('.csv')[0]  # split away the ticker from the file-name
+    print(ratio)
     dataset = f'crypto_data/{ratio}.csv'  # get the full path to the file.
     df = pd.read_csv(dataset, names=['time', 'low', 'high', 'open', 'close', 'volume'])  # read in specific file
 
@@ -114,22 +117,16 @@ main_df = main_df[(main_df.index < last_5pct)]
 train_x, train_y = preprocess_df(main_df)
 validation_x, validation_y = preprocess_df(validation_main_df)
 
-print(f"train data: {len(train_x)} validation: {len(validation_x)}")
-print(f"Dont buys: {train_y.count(0)}, buys: {train_y.count(1)}")
-print(f"VALIDATION Dont buys: {validation_y.count(0)}, buys: {validation_y.count(1)}")
-
-
-## Make the model
 model = Sequential()
-model.add(CuDNNLSTM(128, input_shape=(train_x.shape[1:]), return_sequences=True))
+model.add(LSTM(128, input_shape=(train_x.shape[1:]), return_sequences=True))
 model.add(Dropout(0.2))
 model.add(BatchNormalization())
 
-model.add(CuDNNLSTM(128, return_sequences=True))
+model.add(LSTM(128, return_sequences=True))
 model.add(Dropout(0.1))
 model.add(BatchNormalization())
 
-model.add(CuDNNLSTM(128))
+model.add(LSTM(128))
 model.add(Dropout(0.2))
 model.add(BatchNormalization())
 
@@ -148,25 +145,16 @@ model.compile(
     metrics=['accuracy']
 )
 
-tensorboard = TensorBoard(log_dir=f"logs/{NAME}")
+tensorboard = TensorBoard(log_dir="logs/{}".format(NAME))
 
-# Dunno how it works
 filepath = "RNN_Final-{epoch:02d}-{val_acc:.3f}"  # unique file name that will include the epoch and the validation acc for that epoch
 checkpoint = ModelCheckpoint("models/{}.model".format(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')) # saves only the best ones
 
 # Train model
-history = model.fit(
-    train_x, train_y,
-    batch_size=BATCH_SIZE,
-    epochs=EPOCHS,
-    validation_data=(validation_x, validation_y),
-    callbacks=[tensorboard, checkpoint],
-    )
+history = model.fit(train_x, train_y,batch_size=BATCH_SIZE,epochs=EPOCHS,validation_data=(validation_x, validation_y),callbacks=[tensorboard,checkpoint], )
 
 # Score model
 score = model.evaluate(validation_x, validation_y, verbose=0)
 print('Test loss:', score[0])
 print('Test accuracy:', score[1])
-
 # Save model
-model.save(f"models/{NAME}")
